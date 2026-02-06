@@ -96,29 +96,30 @@ function doGet(e) {
 /**
  * POST 請求處理 - 資料上傳
  */
+/**
+ * POST 請求處理 - 資料上傳
+ */
 function doPost(e) {
   try {
-    const data = JSON.parse(e.postData.contents);
-    const action = data.action;
-    
-    switch (action) {
-      case 'import':
-        return jsonResponse(importData(data));
-      case 'query':
-        return jsonResponse(queryData(data));
-      default:
-        return jsonResponse({ success: false, error: '未知的操作' });
-    }
+    const params = JSON.parse(e.postData.contents);
+    return handleApiRequest(null, params);
   } catch (error) {
-    return jsonResponse({ success: false, error: error.message });
+    return jsonResponse({ success: false, error: 'POST Body Parsing Error: ' + error.message });
   }
 }
 
 /**
  * API 請求處理
+ * @param {Object} e - Event object (optional in POST)
+ * @param {Object} params - Parameters object
  */
-function handleApiRequest(e) {
-  const action = e.parameter.action;
+function handleApiRequest(e, params) {
+  // 如果沒有傳入 params，嘗試從 e.parameter 取得 (GET 模式)
+  if (!params && e && e.parameter) {
+    params = e.parameter;
+  }
+  
+  const action = params.action;
   
   try {
     // 最簡單的測試 - 不需要任何權限
@@ -141,31 +142,35 @@ function handleApiRequest(e) {
     }
     
     if (action === 'getSummary') {
-      return jsonResponse(getSummary(e.parameter));
+      return jsonResponse(getSummary(params));
     }
     
     if (action === 'queryData') {
-      return jsonResponse(queryData(e.parameter));
+      return jsonResponse(queryData(params));
     }
     
     if (action === 'getPlantComparison') {
-      return jsonResponse(getPlantComparison(e.parameter));
+      return jsonResponse(getPlantComparison(params));
     }
     
     if (action === 'getWasteTypeStats') {
-      return jsonResponse(getWasteTypeStats(e.parameter));
+      return jsonResponse(getWasteTypeStats(params));
     }
     
     if (action === 'getSourceRanking') {
-      return jsonResponse(getSourceRanking(e.parameter));
+      return jsonResponse(getSourceRanking(params));
     }
     
     if (action === 'getDailyTrend') {
-      return jsonResponse(getDailyTrend(e.parameter));
+      return jsonResponse(getDailyTrend(params));
     }
     
     if (action === 'getSourceList') {
-      return jsonResponse(getSourceList(e.parameter));
+      return jsonResponse(getSourceList(params));
+    }
+
+    if (action === 'importData' || action === 'import') {
+      return jsonResponse(importData(params));
     }
     
     return jsonResponse({ 
