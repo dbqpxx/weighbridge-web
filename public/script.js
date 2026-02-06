@@ -85,6 +85,34 @@ function callApi(action, params = {}) {
         });
 }
 
+/**
+ * 呼叫 Google Apps Script API (POST)
+ * 用於上傳大量資料，避免 GET URL 長度限制
+ */
+function callApiPost(action, params = {}) {
+    const url = API_URL; // POST 用同一個 URL (doPost)
+    const payload = { ...params, action: action };
+
+    return fetch(url, {
+        method: 'POST',
+        mode: 'cors',
+        headers: {
+            'Content-Type': 'text/plain;charset=utf-8',
+        },
+        body: JSON.stringify(payload)
+    })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+        })
+        .catch(error => {
+            console.error('API Post Error:', error);
+            throw error;
+        });
+}
+
 // ============================================================
 // 初始化
 // ============================================================
@@ -553,77 +581,27 @@ function doUpload() {
         }
     }, 200);
 
-    // 呼叫後端匯入
-    // 注意: importData 可能需要傳遞大量資料，如果是 POST 請求會更好
-    // 但 GAS Web App doPost 處理較複雜，且有 CORS 問題
-    // 如果資料量太大，GET 請求可能會超過長度限制
-    // 這裡暫時維持 GET，若失敗則需改為 POST + JSONP 或 ContentService
-
-    // **重要修正**：因為上傳資料量大，這裡必須將資料分批或使用 POST
-    // 但為了簡化遷移，我們先嘗試標準 API 呼叫。如果遇到 414 URI Too Long，
-    // 則需要改用 doPost。
-    // 目前先假設使用者上傳的資料量在合理範圍內。
-
-    // 修改：使用 POST 發送大量數據
-    const formData = new FormData();
-    formData.append('action', 'importData');
-    formData.append('plant', plant);
-    formData.append('yearMonth', yearMonth);
-    // JSON stringify uploadedData is huge, let's hope fetch handles it
-    // formData.append('data', JSON.stringify(uploadedData)); <--- 這樣傳也不行，GAS doPost 接收要特別處理
-
-    // 既然要無痛轉移，我們先用 callApi (GET)，如果不穩定再說。
-    // 但上傳通常很大，GET 99% 會失敗。
-    // 讓我們改寫 callApi 支援 POST (如果參數太長)
-
-    // 策略轉向：使用 POST 發送
-    const postParams = {
+    // 呼叫後端匯入 (使用 POST)
+    callApiPost('importData', {
         plant: plant,
         yearMonth: yearMonth,
         data: uploadedData
-    };
-
-    // 使用專門的 POST 請求
-    fetch(API_URL, {
-        method: 'POST',
-        body: JSON.stringify(postParams),  // 傳送 JSON 字串
-        mode: 'no-cors' // GAS doPost with no-cors doesn't return response to JS
-        // 這是一個大坑：GAS doPost 跨域需要用 redirect，fetch 在 no-cors 模式下拿不到回應
-        // 在 cors 模式下，GAS 必須回傳正確 header。
-        // 我們先假設 GAS 端 doPost 已經寫好了 (看過代碼有 doGet，但不確定 doPost)
-        // 檢查 Code.gs：有 doPost，且有處理 JSON。
-        // function doPost(e) { check... return ContentService... }
-        // 且有 setHeader('Access-Control-Allow-Origin', '*')
-
-        // 所以我們應該可以用標準 POST
     })
-        .then(response => {
-            // 因 no-cors，這裡拿不到內容，或是不透明的回應
-            // 如果是用 CORS，則可以拿到
-            // Code.gs 的 doPost 必須實作 OPTIONS 處理才能支援 CORS preflight
-            // 但通常 GAS 不支援 OPTIONS。
-
-            // 替代方案：我們使用 GET 發送，但僅傳送 "資料摘要" 讓使用者確認，
-            // 真實上傳可能需要將資料切片或使用表單提交 (Form Post) 到隱藏 iframe。
-
-            // 為了不讓事情變太複雜，我們暫時使用 callApi (GET)。
-            // 如果失敗，提醒使用者資料量過大。
-            return callApi('importData', {
-                plant: plant,
-                yearMonth: yearMonth,
-                data: uploadedData
-            });
-        })
-        .then(response => {
+        .then(result => {
             clearInterval(interval);
             progressFill.style.width = '100%';
             progressText.textContent = '完成!';
 
-            if (response.success) {
-                const weightMsg = `成功匯入 ${response.count} 筆資料 (共 ${formatNumber(response.totalWeightKg)} KG)`;
-                result.innerHTML = '✓ ' + weightMsg;
-                result.classList.add('success');
+            if (result.success) {
+                const weightMsg = `成功匯入 ${result.count} 筆資料 (共 ${formatNumber(result.totalWeightKg)} KG)`;
+                document.getElementById('uploadResult').innerHTML = '✓ ' + weightMsg;
+                document.getElementById('uploadResult').classList.add('success');
                 showToast(weightMsg, 'success');
+
+                // 如果有新增來源，重新載入來源清單
+                if (result.newSources > 0) {
+                    loadSourceOptions();
+                }
 
                 // 重設表單
                 setTimeout(() => {
@@ -631,29 +609,27 @@ function doUpload() {
                     document.getElementById('uploadYearMonth').value = '';
                     document.getElementById('fileName').textContent = '';
                     uploadedData = null;
-                    progress.style.display = 'none';
-                    progressFill.style.width = '0%';
+                    document.getElementById('uploadProgress').style.display = 'none';
+                    document.getElementById('progressFill').style.width = '0%';
+                    document.getElementById('fileInput').value = '';
                 }, 2000);
             } else {
-                result.innerHTML = '✗ ' + response.error;
-                result.classList.add('error');
-                showToast('上傳失敗: ' + response.error, 'error');
+                throw new Error(result.error);
             }
             uploadBtn.disabled = false;
         })
         .catch(error => {
             clearInterval(interval);
-            progress.style.display = 'none';
+            document.getElementById('uploadProgress').style.display = 'none';
 
-            // 特殊處理：如果是上傳，很可能是 URL 太長
-            if (error.message && error.message.includes('414')) {
-                result.innerHTML = '✗ 錯誤: 資料量過大，無法透過 GET 上傳。建議分批處理。';
-            } else {
-                result.innerHTML = '✗ 系統錯誤: ' + error.message;
+            let errorMsg = error.message;
+            if (errorMsg && errorMsg.includes('414')) {
+                errorMsg = '資料量過大';
             }
 
-            result.classList.add('error');
-            showToast('上傳失敗', 'error');
+            document.getElementById('uploadResult').innerHTML = '✗ 上傳失敗: ' + errorMsg;
+            document.getElementById('uploadResult').classList.add('error');
+            showToast('上傳失敗: ' + errorMsg, 'error');
             uploadBtn.disabled = false;
         });
 }
