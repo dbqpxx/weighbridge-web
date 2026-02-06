@@ -1,5 +1,5 @@
 [build]
-  publish = "web-shell"
+  publish = "public"
 
 [[redirects]]
   from = "/*"
