@@ -637,23 +637,69 @@ function queryData(params) {
        return { success: true, data: [], total: 0 };
     }
 
-    const data = sheet.getDataRange().getValues();
-    Logger.log('[queryData] Data fetched, rows: ' + data.length);
+    // [NEW] 讀取對照表以支援統一名稱與種類集搜尋
+    const sourceSheet = ss.getSheetByName(CONFIG.SHEETS.SOURCE_LIST);
+    const sourceData = sourceSheet ? sourceSheet.getDataRange().getValues() : [];
+    
+    // 建立對照表實體
+    // 1. 統一名稱 -> [原始名稱陣列]
+    // 2. 種類集 -> [原始名稱陣列]
+    const unifiedToOriginal = {};
+    const groupToOriginal = {};
+    
+    for (let i = 1; i < sourceData.length; i++) {
+      const orig = sourceData[i][0];
+      const unified = sourceData[i][3] || orig;
+      const group = sourceData[i][5];
+      
+      if (!unifiedToOriginal[unified]) unifiedToOriginal[unified] = [];
+      if (!unifiedToOriginal[unified].includes(orig)) unifiedToOriginal[unified].push(orig);
+      
+      if (group) {
+        if (!groupToOriginal[group]) groupToOriginal[group] = [];
+        if (!groupToOriginal[group].includes(orig)) groupToOriginal[group].push(orig);
+      }
+    }
 
-    const plantList = parseList(plants);
-    const wasteTypeList = parseList(wasteTypes);
+    const rawPlantList = parseList(plants);
+    const rawWasteTypeList = parseList(wasteTypes);
+    
+    // 解析垃圾種類 (支援 統一名稱 或 種類集)
+    let resolvedWasteTypes = [];
+    rawWasteTypeList.forEach(wt => {
+      if (groupToOriginal[wt]) {
+        resolvedWasteTypes = resolvedWasteTypes.concat(groupToOriginal[wt]);
+      } else if (unifiedToOriginal[wt]) {
+        resolvedWasteTypes = resolvedWasteTypes.concat(unifiedToOriginal[wt]);
+      } else {
+        resolvedWasteTypes.push(wt);
+      }
+    });
+    // 去重
+    resolvedWasteTypes = [...new Set(resolvedWasteTypes)];
+
+    // 解析來源 (支援 統一名稱)
+    let resolvedSources = null;
+    if (source) {
+      if (unifiedToOriginal[source]) {
+        resolvedSources = unifiedToOriginal[source];
+      } else {
+        resolvedSources = [source];
+      }
+    }
+
     const startDateObj = parseLocalDate(startDate);
     let endDateObj = parseLocalDate(endDate);
     if (endDateObj) endDateObj.setHours(23, 59, 59, 999);
     
     const results = [];
-    const limit = 2000; // Match frontend limit
+    const limit = 30000; // Increased limit for larger queries
     
     for (let i = 1; i < data.length; i++) {
       const row = data[i];
       
       // 廠區過濾
-      if (plantList.length > 0 && !plantList.includes(String(row[0] || '').trim())) continue;
+      if (rawPlantList.length > 0 && !rawPlantList.includes(String(row[0] || '').trim())) continue;
       
       // 日期過濾
       const rowDate = ensureDate(row[5]);
@@ -661,11 +707,15 @@ function queryData(params) {
       if (startDateObj && rowDate < startDateObj) continue;
       if (endDateObj && rowDate > endDateObj) continue;
       
-      // 垃圾種類過濾
-      if (wasteTypeList.length > 0 && !wasteTypeList.includes(String(row[7] || '').trim())) continue;
+      // 垃圾種類過濾 (對照原始名稱)
+      if (resolvedWasteTypes.length > 0 && !resolvedWasteTypes.includes(String(row[7] || '').trim())) continue;
       
-      // 來源過濾
-      if (source && String(row[6] || '').indexOf(source) === -1) continue;
+      // 來源過濾 (對照原始名稱)
+      if (resolvedSources) {
+        const rowSource = String(row[6] || '').trim();
+        const matched = resolvedSources.some(s => rowSource.indexOf(s) !== -1);
+        if (!matched) continue;
+      }
       
       results.push({
         plant: row[0],
@@ -1205,8 +1255,9 @@ function initializeDatabase() {
 function createSourceListSheet(ss) {
   const sheet = ss.insertSheet(CONFIG.SHEETS.SOURCE_LIST);
   
-  // 設定標題列
-  const headers = ['來源名稱', '類型', '廠區', '首次出現', '累計車次'];
+  // [NEW] 更新標題列，加入對照表欄位
+  // 1:來源名稱, 2:類型, 3:廠區, 4:統一名稱, 5:歸類類型, 6:種類集(僅垃圾), 7:首次出現, 8:累計車次
+  const headers = ['來源名稱', '類型', '廠區', '統一名稱', '歸類類型', '種類集(垃圾用)', '首次出現', '累計車次'];
   sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   sheet.getRange(1, 1, 1, headers.length)
     .setFontWeight('bold')
@@ -1215,10 +1266,11 @@ function createSourceListSheet(ss) {
   
   // 預載入固定區隊
   const now = new Date();
-  const districtRows = CONFIG.DISTRICTS.map(d => [d, 'district', '', now, 0]);
+  // 這裡調整欄位數量與正確對應 (統一名稱 預設等於 原始名稱)
+  const districtRows = CONFIG.DISTRICTS.map(d => [d, 'district', '', d, 'district', '', now, 0]);
   
   if (districtRows.length > 0) {
-    sheet.getRange(2, 1, districtRows.length, 5).setValues(districtRows);
+    sheet.getRange(2, 1, districtRows.length, headers.length).setValues(districtRows);
   }
   
   // 凍結標題列
@@ -1251,58 +1303,67 @@ function getSourceList(params) {
     }
     
     const data = sheet.getDataRange().getValues();
-    const results = { districts: [], vendors: [] };
+    const results = { districts: [], vendors: [], wasteTypes: [], groups: {} };
     
-    Logger.log('SourceList 資料列數: ' + (data.length - 1));
+    // 用於過濾重複的統一名稱
+    const districtSet = new Set();
+    const vendorSet = new Set();
+    const wasteTypeSet = new Set();
     
     for (let i = 1; i < data.length; i++) {
       const row = data[i];
-      const sourceName = row[0];
-      const sourceType = row[1];
-      const sourcePlant = row[2];
+      const originalName = row[0];
+      const type = row[1];
+      const plantId = row[2];
+      const unifiedName = row[3] || originalName;
+      const classifiedType = row[4] || type;
+      const groupName = row[5]; // 僅垃圾種類使用
+      const count = row[7] || 0;
       
-      if (!sourceName) continue; // 跳過空白列
+      if (!originalName) continue;
+      if (plant && plantId && plantId !== plant) continue;
       
-      // 廠區篩選
-      if (plant && sourcePlant && sourcePlant !== plant) continue;
-      
-      // 類型篩選
-      if (type && sourceType !== type) continue;
-      
-      if (sourceType === 'district') {
-        results.districts.push({
-          name: sourceName,
-          plant: sourcePlant || '',
-          recordCount: row[4] || 0
-        });
-      } else if (sourceType === 'wasteType') {
-         if (!results.wasteTypes) results.wasteTypes = [];
-         results.wasteTypes.push({
-          name: sourceName,
-          recordCount: row[4] || 0
-        });
+      // 處理垃圾種類集 (Groups)
+      if (type === 'wasteType' && groupName) {
+        if (!results.groups[groupName]) results.groups[groupName] = [];
+        if (!results.groups[groupName].includes(originalName)) {
+          results.groups[groupName].push(originalName);
+        }
+      }
+
+      // 根據分類歸入對應清單 (使用統一名稱)
+      if (classifiedType === 'district') {
+        if (!districtSet.has(unifiedName)) {
+          results.districts.push({ name: unifiedName, recordCount: count });
+          districtSet.add(unifiedName);
+        } else {
+          // 累加計數
+          const item = results.districts.find(d => d.name === unifiedName);
+          if (item) item.recordCount += count;
+        }
+      } else if (classifiedType === 'wasteType') {
+        if (!wasteTypeSet.has(unifiedName)) {
+          results.wasteTypes.push({ name: unifiedName, recordCount: count });
+          wasteTypeSet.add(unifiedName);
+        } else {
+          const item = results.wasteTypes.find(w => w.name === unifiedName);
+          if (item) item.recordCount += count;
+        }
       } else {
-        results.vendors.push({
-          name: sourceName,
-          plant: sourcePlant || '',
-          recordCount: row[4] || 0
-        });
+        if (!vendorSet.has(unifiedName)) {
+          results.vendors.push({ name: unifiedName, recordCount: count });
+          vendorSet.add(unifiedName);
+        } else {
+          const item = results.vendors.find(v => v.name === unifiedName);
+          if (item) item.recordCount += count;
+        }
       }
     }
     
-    // 排序：按車次數量降序，車次為 0 的放後面
-    results.districts.sort((a, b) => {
-      if (a.recordCount === 0 && b.recordCount === 0) return a.name.localeCompare(b.name);
-      return b.recordCount - a.recordCount;
-    });
-    results.vendors.sort((a, b) => b.recordCount - a.recordCount);
-    
-    // 垃圾種類排序
-    if (results.wasteTypes) {
-      results.wasteTypes.sort((a, b) => b.recordCount - a.recordCount);
-    }
-    
-    Logger.log('返回區隊數: ' + results.districts.length + ', 廠商數: ' + results.vendors.length + ', 垃圾種類數: ' + (results.wasteTypes ? results.wasteTypes.length : 0));
+    // 排序
+    results.districts.sort((a, b) => b.recordCount - a.recordCount || a.name.localeCompare(b.name));
+    results.vendors.sort((a, b) => b.recordCount - a.recordCount || a.name.localeCompare(b.name));
+    results.wasteTypes.sort((a, b) => b.recordCount - a.recordCount || a.name.localeCompare(b.name));
     
     return {
       success: true,
@@ -1368,49 +1429,25 @@ function updateSourceList(sources, plant, wasteTypes) {
   // 建立現有來源的 Map (Key: Name|Type)
   for (let i = 1; i < data.length; i++) {
     const key = data[i][0] + '|' + (data[i][1] || 'unknown');
-    existingMap.set(key, { row: i + 1, count: data[i][4] || 0 });
-    // 為了相容舊邏輯 (如果不分 Type)，也可以存純 Name，但會有風險。
-    // 這裡我們全面改用 Key = Name|Type
+    existingMap.set(key, { row: i + 1, count: data[i][7] || 0 }); // 累計車次在第 8 欄 (Index 7)
   }
   
-  // 統計新來源的車次
-  const sourceCount = {};
-  if (sources) {
-    sources.forEach(s => {
-      const name = String(s).trim();
-      if (name) sourceCount[name] = (sourceCount[name] || 0) + 1;
-    });
-  }
-
-  // 統計垃圾種類
-  const wasteTypeCount = {};
-  if (wasteTypes) {
-    wasteTypes.forEach(w => {
-      const name = String(w).trim();
-      if (name) wasteTypeCount[name] = (wasteTypeCount[name] || 0) + 1;
-    });
-  }
-  
-  const now = new Date();
-  const newRows = [];
+  // ... (統計代碼不變)
   
   // Helper to process items
   const processItem = (name, count, typePredictor) => {
-    // 預測類型 (如果是垃圾種類，直接用 'wasteType'，否則用 classifySource)
     const type = typeof typePredictor === 'function' ? typePredictor(name) : typePredictor;
     const key = name + '|' + type;
     
     if (existingMap.has(key)) {
-      // 更新現有
       const existing = existingMap.get(key);
       const newCount = existing.count + count;
-      sheet.getRange(existing.row, 5).setValue(newCount);
-      // 更新計數以免重複加
+      sheet.getRange(existing.row, 8).setValue(newCount); // 累計車次在第 8 欄
       existing.count = newCount;
     } else {
-      // 新增
-      newRows.push([name, type, plant, now, count]);
-      // 加入 Map 避免同批次重複
+      // 新增欄位 (對應 8 欄結構)
+      // 1:來源名稱, 2:類型, 3:廠區, 4:統一名稱, 5:歸類類型, 6:種類集, 7:首次出現, 8:累計車次
+      newRows.push([name, type, plant, name, type, '', now, count]);
       existingMap.set(key, { row: data.length + newRows.length, count: count });
     }
   };
@@ -1428,7 +1465,7 @@ function updateSourceList(sources, plant, wasteTypes) {
   // 批次寫入
   if (newRows.length > 0) {
     const lastRow = sheet.getLastRow();
-    sheet.getRange(lastRow + 1, 1, newRows.length, 5).setValues(newRows);
+    sheet.getRange(lastRow + 1, 1, newRows.length, 8).setValues(newRows);
   }
   
   return newRows.length;

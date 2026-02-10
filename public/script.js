@@ -274,14 +274,26 @@ function updateSourceDropdowns() {
         });
     }
 
-    // [NEW] 更新垃圾種類清單
+    // [NEW] 更新垃圾種類清單 (加入種類集)
     if (wasteTypeList && APP.sourceList.wasteTypes) {
         wasteTypeList.innerHTML = '';
-        // Add default '全部' option if needed, but usually query logic handles empty
+
+        // 1. 加入「全部」
         const allOption = document.createElement('option');
         allOption.value = '全部';
         wasteTypeList.appendChild(allOption);
 
+        // 2. 加入「種類集 (Groups)」
+        if (APP.sourceList.groups) {
+            Object.keys(APP.sourceList.groups).forEach(groupName => {
+                const option = document.createElement('option');
+                option.value = groupName;
+                option.label = `[種類集] ${groupName}`; // 在某些瀏覽器可見，提示為集合
+                wasteTypeList.appendChild(option);
+            });
+        }
+
+        // 3. 加入「統一名稱」
         APP.sourceList.wasteTypes.forEach(w => {
             const option = document.createElement('option');
             option.value = w.name;
