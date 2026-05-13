@@ -637,6 +637,8 @@ function queryData(params) {
        return { success: true, data: [], total: 0 };
     }
 
+    const data = sheet.getDataRange().getValues();
+
     // [NEW] 讀取對照表以支援統一名稱與種類集搜尋
     const sourceSheet = ss.getSheetByName(CONFIG.SHEETS.SOURCE_LIST);
     const sourceData = sourceSheet ? sourceSheet.getDataRange().getValues() : [];
@@ -1294,13 +1296,8 @@ function getSourceList(params) {
   
   try {
     const ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
-    let sheet = ss.getSheetByName(CONFIG.SHEETS.SOURCE_LIST);
-    
-    // 如果 SourceList 不存在，建立它
-    if (!sheet) {
-      Logger.log('SourceList 不存在，正在建立...');
-      sheet = createSourceListSheet(ss);
-    }
+    // [NEW] 確保結構正確
+    const sheet = ensureSourceListStructure(ss);
     
     const data = sheet.getDataRange().getValues();
     const results = { districts: [], vendors: [], wasteTypes: [], groups: {} };
@@ -1417,11 +1414,9 @@ function updateSourceList(sources, plant, wasteTypes) {
   if ((!sources || sources.length === 0) && (!wasteTypes || wasteTypes.length === 0)) return;
   
   const ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
-  let sheet = ss.getSheetByName(CONFIG.SHEETS.SOURCE_LIST);
   
-  if (!sheet) {
-    sheet = createSourceListSheet(ss);
-  }
+  // [NEW] 確保結構正確
+  const sheet = ensureSourceListStructure(ss);
   
   const data = sheet.getDataRange().getValues();
   const existingMap = new Map();
@@ -1432,7 +1427,25 @@ function updateSourceList(sources, plant, wasteTypes) {
     existingMap.set(key, { row: i + 1, count: data[i][7] || 0 }); // 累計車次在第 8 欄 (Index 7)
   }
   
-  // ... (統計代碼不變)
+  //統計新來源的車次
+  const sourceCount = {};
+  if (sources) {
+    sources.forEach(s => {
+      const name = String(s).trim();
+      if (name) sourceCount[name] = (sourceCount[name] || 0) + 1;
+    });
+  }
+
+  const wasteTypeCount = {};
+  if (wasteTypes) {
+    wasteTypes.forEach(w => {
+      const name = String(w).trim();
+      if (name) wasteTypeCount[name] = (wasteTypeCount[name] || 0) + 1;
+    });
+  }
+  
+  const now = new Date();
+  const newRows = [];
   
   // Helper to process items
   const processItem = (name, count, typePredictor) => {
@@ -1469,6 +1482,51 @@ function updateSourceList(sources, plant, wasteTypes) {
   }
   
   return newRows.length;
+}
+
+
+/**
+ * 確保 SourceList 結構正確 (用於升級舊版或建立新版)
+ */
+function ensureSourceListStructure(ss) {
+  let sheet = ss.getSheetByName(CONFIG.SHEETS.SOURCE_LIST);
+  if (!sheet) {
+    return createSourceListSheet(ss);
+  }
+
+  const currentHeaders = sheet.getRange(1, 1, 1, Math.max(1, sheet.getLastColumn())).getValues()[0];
+  const targetHeaders = ['來源名稱', '類型', '廠區', '統一名稱', '歸類類型', '種類集(垃圾用)', '首次出現', '累計車次'];
+  
+  if (currentHeaders.length < targetHeaders.length) {
+    Logger.log('檢測到舊版 SourceList，正在自動升級結構...');
+    // 讀取舊資料
+    const oldData = sheet.getDataRange().getValues(); 
+    const newData = [];
+    
+    for (let i = 1; i < oldData.length; i++) {
+      const row = oldData[i];
+      // 舊版 (5欄): 名稱, 類型, 廠區, 首次, 累計
+      newData.push([
+        row[0], row[1], row[2], 
+        row[0], row[1], '', // 對照欄位預設值
+        row[3], row[4]
+      ]);
+    }
+    
+    sheet.clear();
+    sheet.getRange(1, 1, 1, targetHeaders.length).setValues([targetHeaders]);
+    sheet.getRange(1, 1, 1, targetHeaders.length)
+      .setFontWeight('bold')
+      .setBackground('#4285f4')
+      .setFontColor('#ffffff');
+    
+    if (newData.length > 0) {
+      sheet.getRange(2, 1, newData.length, targetHeaders.length).setValues(newData);
+    }
+    sheet.setFrozenRows(1);
+  }
+  
+  return sheet;
 }
 
 // ============================================================
