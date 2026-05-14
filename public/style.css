@@ -1,4 +1,5 @@
-/* ============================================================
+﻿
+    /* ============================================================
    CSS 變數與基礎設定
    ============================================================ */
 
@@ -794,13 +795,94 @@
     }
 
     /* ============================================================
+   全域載入遮罩
+   ============================================================ */
+
+    .loading-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(15, 23, 42, 0.55);
+        backdrop-filter: blur(4px);
+        -webkit-backdrop-filter: blur(4px);
+        z-index: 9999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.3s ease;
+    }
+
+    .loading-overlay.active {
+        opacity: 1;
+        pointer-events: all;
+    }
+
+    .loading-content {
+        text-align: center;
+        background: var(--bg-secondary);
+        padding: 40px 56px;
+        border-radius: var(--border-radius-lg);
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.25);
+        animation: loadingPulse 2s ease-in-out infinite;
+    }
+
+    @keyframes loadingPulse {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.02); }
+    }
+
+    .loading-spinner {
+        margin-bottom: 20px;
+        color: var(--primary);
+    }
+
+    .loading-spinner svg {
+        filter: drop-shadow(0 0 8px rgba(79, 70, 229, 0.35));
+    }
+
+    .loading-text {
+        font-size: 16px;
+        font-weight: 600;
+        color: var(--text-primary);
+        margin-bottom: 6px;
+    }
+
+    .loading-subtext {
+        font-size: 13px;
+        color: var(--text-secondary);
+    }
+
+    /* 防止 body 在遮罩啟用時滾動 */
+    body.loading-active {
+        overflow: hidden;
+    }
+
+    @keyframes spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+    }
+
+    /* ============================================================
    響應式設計
    ============================================================ */
+
+    @media (max-width: 1024px) {
+        .charts-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .upload-section {
+            grid-template-columns: 1fr;
+        }
+    }
 
     @media (max-width: 768px) {
         .sidebar {
             transform: translateX(-100%);
-            width: 260px;
         }
 
         .sidebar.open {
@@ -815,15 +897,45 @@
             display: block;
         }
 
-        .charts-grid {
-            grid-template-columns: 1fr;
-        }
-
-        .upload-section {
-            grid-template-columns: 1fr;
-        }
-
         .stats-grid {
-            grid-template-columns: repeat(2, 1fr);
+            grid-template-columns: 1fr 1fr;
+        }
+
+        .filter-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .query-stats {
+            flex-wrap: wrap;
+        }
+
+        .btn-group {
+            flex-direction: column;
+            width: 100%;
+        }
+
+        .btn-group .btn {
+            width: 100%;
+            justify-content: center;
         }
     }
+
+    @media (max-width: 480px) {
+        .stats-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .stat-card {
+            padding: 16px;
+        }
+
+        .stat-icon {
+            width: 44px;
+            height: 44px;
+        }
+
+        .stat-value {
+            font-size: 20px;
+        }
+    }
+

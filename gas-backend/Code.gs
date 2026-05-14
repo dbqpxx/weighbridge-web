@@ -728,8 +728,8 @@ function queryData(params) {
         if (!resolvedSources.some(s => src.indexOf(s) !== -1)) continue;
       }
       
-      const nw = row[10] || 0;
-      const amt = row[11] || 0;
+      const nw = parseNumber(row[10]);
+      const amt = parseNumber(row[11]);
       
       // ─── 匯總統計（在遍歷中直接做） ───
       totalCount++;
@@ -824,10 +824,10 @@ function queryData(params) {
         datetime: row[5],
         source: row[6],
         wasteType: row[7],
-        grossWeight: row[8],
-        tareWeight: row[9],
-        netWeight: row[10],
-        amount: row[11],
+        grossWeight: parseNumber(row[8]),
+        tareWeight: parseNumber(row[9]),
+        netWeight: parseNumber(row[10]),
+        amount: parseNumber(row[11]),
         remark: row[12]
       });
     }
@@ -917,8 +917,8 @@ function getSummary(params) {
       if (endDateObj && rowDate > endDateObj) continue;
       
       const plant = row[0];
-      const netWeight = row[10] || 0;
-      const amount = row[11] || 0;
+      const netWeight = parseNumber(row[10]);
+      const amount = parseNumber(row[11]);
       
       totalRecords++;
       totalNetWeight += netWeight;
@@ -984,7 +984,7 @@ function getPlantComparison(params) {
       
       const plant = row[0];
       const wasteType = row[7];
-      const netWeight = row[10] || 0;
+      const netWeight = parseNumber(row[10]);
       
       if (!comparison[plant]) {
         comparison[plant] = {};
@@ -1039,8 +1039,8 @@ function getWasteTypeStats(params) {
       if (endDateObj && rowDate > endDateObj) continue;
       
       const wasteType = row[7];
-      const netWeight = row[10] || 0;
-      const amount = row[11] || 0;
+      const netWeight = parseNumber(row[10]);
+      const amount = parseNumber(row[11]);
       
       if (!stats[wasteType]) {
         stats[wasteType] = { count: 0, netWeight: 0, amount: 0 };
@@ -1106,8 +1106,8 @@ function getSourceRanking(params) {
       if (endDateObj && rowDate > endDateObj) continue;
       
       const source = row[6];
-      const netWeight = row[10] || 0;
-      const amount = row[11] || 0;
+      const netWeight = parseNumber(row[10]);
+      const amount = parseNumber(row[11]);
       
       if (!ranking[source]) {
         ranking[source] = { count: 0, netWeight: 0, amount: 0 };
@@ -1180,8 +1180,8 @@ function getDailyTrend(params) {
         'yyyy-MM-dd'
       );
       
-      const netWeight = row[10] || 0;
-      const amount = row[11] || 0;
+      const netWeight = parseNumber(row[10]);
+      const amount = parseNumber(row[11]);
       
       if (!trend[dateKey]) {
         trend[dateKey] = { count: 0, netWeight: 0, amount: 0 };
