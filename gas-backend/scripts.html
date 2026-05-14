@@ -572,7 +572,7 @@
             });
         }
 
-        queryBtn.addEventListener('click', doQuery);
+        queryBtn.addEventListener('click', () => doQuery());
         resetBtn.addEventListener('click', resetQuery);
         exportBtn.addEventListener('click', exportQueryResult);
 
@@ -768,7 +768,7 @@
             plants: plants.join(','),
             wasteTypes: wasteType === '全部' ? '' : wasteType,
             source: source,
-            mode: mode || 'stats'
+            mode: (typeof mode === 'string') ? mode : 'stats'
         };
 
         APP.lastQueryParams = params;
