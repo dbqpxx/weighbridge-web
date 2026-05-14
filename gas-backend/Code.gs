@@ -317,7 +317,15 @@ function importData(params) {
     }
     
     if (rows.length === 0) {
-      return { success: false, error: '沒有有效的資料列' };
+      return { 
+        success: false, 
+        error: '沒有有效的資料列', 
+        debug: {
+          dataLength: data.length,
+          firstRow: data.length > 1 ? data[1] : null,
+          firstRowLength: data.length > 1 ? (data[1] ? data[1].length : 0) : 0
+        }
+      };
     }
     
     // 寫入資料
@@ -614,38 +622,43 @@ function queryDataTest() {
 }
 
 /**
- * 查詢資料 - 參考 getSummary 的成功模式
+ * 查詢資料 - 統計分析優化版
+ * @param {Object} params - 查詢參數
+ * @param {string} params.mode - 'stats'(預設,匯總統計) 或 'detail'(分頁明細)
+ * @param {number} params.page - 明細模式頁碼 (1-based)
+ * @param {number} params.pageSize - 明細模式每頁筆數 (預設 50)
  */
 function queryData(params) {
   Logger.log('[queryData] Started with params: ' + JSON.stringify(params));
   const { startDate, endDate, plants, wasteTypes, source } = params;
+  const mode = params.mode || 'stats';
+  const page = parseInt(params.page) || 1;
+  const pageSize = parseInt(params.pageSize) || 50;
   
   try {
     const ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
     const sheet = ss.getSheetByName(CONFIG.SHEETS.MASTER);
     
     if (!sheet) {
-      Logger.log('[queryData] Error: Master sheet not found');
       return { success: false, error: 'Master 資料表不存在' };
     }
     
-    // Check data range size
     const lastRow = sheet.getLastRow();
-    Logger.log('[queryData] Last row: ' + lastRow);
-    
     if (lastRow < 2) {
-       return { success: true, data: [], total: 0 };
+      return { success: true, mode: mode, summaryStats: { totalCount: 0, totalWeight: 0, totalAmount: 0 }, byPlant: [], byWasteType: [], bySource: [] };
     }
 
     const data = sheet.getDataRange().getValues();
 
-    // [NEW] 讀取對照表以支援統一名稱與種類集搜尋
+    // ─── 年月索引 ───
+    const startDateObj = parseLocalDate(startDate);
+    let endDateObj = parseLocalDate(endDate);
+    if (endDateObj) endDateObj.setHours(23, 59, 59, 999);
+    const relevantYearMonths = buildYearMonthSet_(startDateObj, endDateObj);
+
+    // ─── 讀取對照表 ───
     const sourceSheet = ss.getSheetByName(CONFIG.SHEETS.SOURCE_LIST);
     const sourceData = sourceSheet ? sourceSheet.getDataRange().getValues() : [];
-    
-    // 建立對照表實體
-    // 1. 統一名稱 -> [原始名稱陣列]
-    // 2. 種類集 -> [原始名稱陣列]
     const unifiedToOriginal = {};
     const groupToOriginal = {};
     
@@ -653,10 +666,8 @@ function queryData(params) {
       const orig = sourceData[i][0];
       const unified = sourceData[i][3] || orig;
       const group = sourceData[i][5];
-      
       if (!unifiedToOriginal[unified]) unifiedToOriginal[unified] = [];
       if (!unifiedToOriginal[unified].includes(orig)) unifiedToOriginal[unified].push(orig);
-      
       if (group) {
         if (!groupToOriginal[group]) groupToOriginal[group] = [];
         if (!groupToOriginal[group].includes(orig)) groupToOriginal[group].push(orig);
@@ -666,7 +677,6 @@ function queryData(params) {
     const rawPlantList = parseList(plants);
     const rawWasteTypeList = parseList(wasteTypes);
     
-    // 解析垃圾種類 (支援 統一名稱 或 種類集)
     let resolvedWasteTypes = [];
     rawWasteTypeList.forEach(wt => {
       if (groupToOriginal[wt]) {
@@ -677,31 +687,30 @@ function queryData(params) {
         resolvedWasteTypes.push(wt);
       }
     });
-    // 去重
     resolvedWasteTypes = [...new Set(resolvedWasteTypes)];
 
-    // 解析來源 (支援 統一名稱)
     let resolvedSources = null;
     if (source) {
-      if (unifiedToOriginal[source]) {
-        resolvedSources = unifiedToOriginal[source];
-      } else {
-        resolvedSources = [source];
-      }
+      resolvedSources = unifiedToOriginal[source] ? unifiedToOriginal[source] : [source];
     }
-
-    const startDateObj = parseLocalDate(startDate);
-    let endDateObj = parseLocalDate(endDate);
-    if (endDateObj) endDateObj.setHours(23, 59, 59, 999);
     
-    const results = [];
-    const limit = 30000; // Increased limit for larger queries
+    // ─── 單次遍歷：同時做篩選 + 統計匯總 ───
+    // 依廠區 > 垃圾種類 彙總
+    const plantMap = {};       // { plantCode: { count, netWeight, amount, wasteTypes: { type: {count, nw, amt} } } }
+    const wasteTypeMap = {};   // { type: { count, netWeight, amount } }
+    const sourceMap = {};      // { source: { count, netWeight, amount } }
+    const matchedIndices = []; // 只有 detail 模式需要
+    let totalCount = 0, totalWeight = 0, totalAmount = 0;
     
     for (let i = 1; i < data.length; i++) {
       const row = data[i];
       
+      // 年月索引快速跳過
+      if (relevantYearMonths && !relevantYearMonths.has(String(row[1] || '').trim())) continue;
+      
       // 廠區過濾
-      if (rawPlantList.length > 0 && !rawPlantList.includes(String(row[0] || '').trim())) continue;
+      const plant = String(row[0] || '').trim();
+      if (rawPlantList.length > 0 && !rawPlantList.includes(plant)) continue;
       
       // 日期過濾
       const rowDate = ensureDate(row[5]);
@@ -709,22 +718,108 @@ function queryData(params) {
       if (startDateObj && rowDate < startDateObj) continue;
       if (endDateObj && rowDate > endDateObj) continue;
       
-      // 垃圾種類過濾 (對照原始名稱)
-      if (resolvedWasteTypes.length > 0 && !resolvedWasteTypes.includes(String(row[7] || '').trim())) continue;
+      // 垃圾種類過濾
+      const wt = String(row[7] || '').trim();
+      if (resolvedWasteTypes.length > 0 && !resolvedWasteTypes.includes(wt)) continue;
       
-      // 來源過濾 (對照原始名稱)
+      // 來源過濾
+      const src = String(row[6] || '').trim();
       if (resolvedSources) {
-        const rowSource = String(row[6] || '').trim();
-        const matched = resolvedSources.some(s => rowSource.indexOf(s) !== -1);
-        if (!matched) continue;
+        if (!resolvedSources.some(s => src.indexOf(s) !== -1)) continue;
       }
       
-      results.push({
+      const nw = row[10] || 0;
+      const amt = row[11] || 0;
+      
+      // ─── 匯總統計（在遍歷中直接做） ───
+      totalCount++;
+      totalWeight += nw;
+      totalAmount += amt;
+      
+      // 依廠區
+      if (!plantMap[plant]) plantMap[plant] = { count: 0, netWeight: 0, amount: 0, wasteTypes: {} };
+      plantMap[plant].count++;
+      plantMap[plant].netWeight += nw;
+      plantMap[plant].amount += amt;
+      
+      // 依廠區 > 垃圾種類
+      if (!plantMap[plant].wasteTypes[wt]) plantMap[plant].wasteTypes[wt] = { count: 0, netWeight: 0, amount: 0 };
+      plantMap[plant].wasteTypes[wt].count++;
+      plantMap[plant].wasteTypes[wt].netWeight += nw;
+      plantMap[plant].wasteTypes[wt].amount += amt;
+      
+      // 全域垃圾種類
+      if (!wasteTypeMap[wt]) wasteTypeMap[wt] = { count: 0, netWeight: 0, amount: 0 };
+      wasteTypeMap[wt].count++;
+      wasteTypeMap[wt].netWeight += nw;
+      wasteTypeMap[wt].amount += amt;
+      
+      // 全域來源排名
+      if (!sourceMap[src]) sourceMap[src] = { count: 0, netWeight: 0, amount: 0 };
+      sourceMap[src].count++;
+      sourceMap[src].netWeight += nw;
+      sourceMap[src].amount += amt;
+      
+      // detail 模式才記錄索引
+      if (mode === 'detail') matchedIndices.push(i);
+    }
+    
+    // ─── 組裝 byPlant 結果 ───
+    const byPlant = Object.entries(plantMap).map(([code, s]) => ({
+      plant: code,
+      plantName: CONFIG.PLANTS[code] || code,
+      count: s.count,
+      netWeight: s.netWeight,
+      netWeightTon: s.netWeight / 1000,
+      amount: s.amount,
+      byWasteType: Object.entries(s.wasteTypes)
+        .map(([type, d]) => ({ wasteType: type, count: d.count, netWeight: d.netWeight, netWeightTon: d.netWeight / 1000, amount: d.amount }))
+        .sort((a, b) => b.netWeight - a.netWeight)
+    })).sort((a, b) => b.netWeight - a.netWeight);
+    
+    // ─── 組裝 byWasteType 結果 ───
+    const byWasteType = Object.entries(wasteTypeMap)
+      .map(([type, d]) => ({
+        wasteType: type, count: d.count, netWeight: d.netWeight, netWeightTon: d.netWeight / 1000, amount: d.amount,
+        percentage: totalWeight > 0 ? ((d.netWeight / totalWeight) * 100).toFixed(1) : '0'
+      }))
+      .sort((a, b) => b.netWeight - a.netWeight);
+    
+    // ─── 組裝 bySource 結果（前 30 名） ───
+    const bySource = Object.entries(sourceMap)
+      .map(([src, d]) => ({ source: src, count: d.count, netWeight: d.netWeight, netWeightTon: d.netWeight / 1000, amount: d.amount }))
+      .sort((a, b) => b.netWeight - a.netWeight)
+      .slice(0, 30);
+    
+    Logger.log('[queryData] mode=' + mode + ', matched ' + totalCount + ' rows');
+    
+    // ─── stats 模式：只回傳匯總統計 ───
+    if (mode === 'stats') {
+      return {
+        success: true,
+        mode: 'stats',
+        summaryStats: { totalCount, totalWeight, totalAmount },
+        byPlant: byPlant,
+        byWasteType: byWasteType,
+        bySource: bySource
+      };
+    }
+    
+    // ─── detail 模式：分頁明細 + 匯總統計 ───
+    const totalFiltered = matchedIndices.length;
+    const totalPages = Math.ceil(totalFiltered / pageSize);
+    const safePage = Math.max(1, Math.min(page, totalPages || 1));
+    const startIdx = (safePage - 1) * pageSize;
+    const endIdx = Math.min(startIdx + pageSize, totalFiltered);
+    
+    const pageData = [];
+    for (let j = startIdx; j < endIdx; j++) {
+      const row = data[matchedIndices[j]];
+      pageData.push({
         plant: row[0],
         plantName: CONFIG.PLANTS[row[0]] || row[0],
         yearMonth: row[1],
         seqNo: row[2],
-        lane: row[3],
         vehicleNo: row[4],
         datetime: row[5],
         source: row[6],
@@ -735,22 +830,56 @@ function queryData(params) {
         amount: row[11],
         remark: row[12]
       });
-      
-      if (results.length >= limit) break;
     }
-    
-    Logger.log('[queryData] Query completed, results found: ' + results.length);
     
     return {
       success: true,
-      data: results,
-      total: results.length
+      mode: 'detail',
+      data: pageData,
+      totalFiltered: totalFiltered,
+      totalPages: totalPages,
+      currentPage: safePage,
+      summaryStats: { totalCount, totalWeight, totalAmount },
+      byPlant: byPlant,
+      byWasteType: byWasteType,
+      bySource: bySource
     };
     
   } catch (error) {
     Logger.log('[queryData] Error: ' + error.stack);
     return { success: false, error: '系統錯誤: ' + error.message };
   }
+}
+
+/**
+ * 根據起訖日期建立年月集合 (民國年月格式，如 "115-01")
+ * 用於快速跳過不相關的年月資料列
+ * @param {Date} startDate - 起始日期
+ * @param {Date} endDate - 結束日期
+ * @returns {Set|null} 年月集合，若無法判定範圍則返回 null（不跳過）
+ */
+function buildYearMonthSet_(startDate, endDate) {
+  if (!startDate && !endDate) return null;
+  
+  // 預設範圍：如果只有一端，給另一端一個合理預設
+  const s = startDate || new Date(2020, 0, 1);
+  const e = endDate || new Date();
+  
+  const set = new Set();
+  const cur = new Date(s.getFullYear(), s.getMonth(), 1);
+  const end = new Date(e.getFullYear(), e.getMonth(), 1);
+  
+  // 安全上限：最多 120 個月 (10 年)
+  let safety = 0;
+  while (cur <= end && safety < 120) {
+    const rocYear = cur.getFullYear() - 1911;
+    const month = String(cur.getMonth() + 1).padStart(2, '0');
+    set.add(rocYear + '-' + month);
+    cur.setMonth(cur.getMonth() + 1);
+    safety++;
+  }
+  
+  return set.size > 0 ? set : null;
 }
 
 /**

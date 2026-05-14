@@ -9,7 +9,12 @@
         charts: {},
         queryResult: [],
         pageSize: 50,
-        currentPageNum: 1
+        currentPageNum: 1,
+        isQuerying: false,        // 查詢進行中鎖
+        lastQueryParams: null,    // 上次查詢參數（分頁用）
+        totalFiltered: 0,         // 符合條件的總筆數
+        totalPages: 0,            // 總頁數
+        summaryStats: null        // 後端回傳的匯總統計
     };
 
     // 廠區顏色
@@ -80,6 +85,12 @@
     }
 
     function switchPage(page) {
+        // 查詢進行中禁止切換頁面
+        if (APP.isQuerying) {
+            showToast('查詢進行中，請稍候再切換頁面', 'info');
+            return;
+        }
+
         const pages = document.querySelectorAll('.page');
         const titles = {
             dashboard: '總覽',
@@ -586,9 +597,26 @@
             summaryView.style.display = 'none';
             viewDetailBtn.classList.add('active');
             viewSummaryBtn.classList.remove('active');
-            // 明細模式顯示分頁
-            const totalPages = Math.ceil(APP.queryResult.length / APP.pageSize);
-            pagination.style.display = totalPages > 1 ? 'flex' : 'none';
+            // 如果尚未載入明細，觸發後端 detail 查詢
+            if (APP.queryResult.length === 0 && APP.lastQueryParams && APP.totalFiltered > 0) {
+                APP.lastQueryParams.mode = 'detail';
+                APP.lastQueryParams.page = 1;
+                APP.lastQueryParams.pageSize = APP.pageSize;
+                showLoading('載入明細資料...', '');
+                google.script.run
+                    .withSuccessHandler(function(result) {
+                        hideLoading();
+                        if (result.success && result.data) {
+                            APP.queryResult = result.data;
+                            APP.currentPageNum = result.currentPage || 1;
+                            APP.totalPages = result.totalPages || 1;
+                            renderQueryTable();
+                        }
+                    })
+                    .withFailureHandler(function(error) { hideLoading(); handleError(error); })
+                    .queryData(APP.lastQueryParams);
+            }
+            pagination.style.display = APP.totalPages > 1 ? 'flex' : 'none';
         } else {
             detailView.style.display = 'none';
             summaryView.style.display = 'block';
@@ -605,59 +633,62 @@
         const summaryBody = document.getElementById('summaryBody');
         const summaryFooter = document.getElementById('summaryFooter');
 
-        if (APP.queryResult.length === 0) {
+        if (!APP.byWasteType || APP.byWasteType.length === 0) {
             summaryBody.innerHTML = '<tr><td colspan="5" class="no-data">無符合條件的資料</td></tr>';
             summaryFooter.style.display = 'none';
             return;
         }
 
-        // 依垃圾種類匯總
-        const summary = {};
-        let totalWeight = 0;
-        let totalAmount = 0;
-        let totalCount = 0;
+        let html = '';
 
-        APP.queryResult.forEach(row => {
-            const type = row.wasteType || '未分類';
-            if (!summary[type]) {
-                summary[type] = { count: 0, netWeight: 0, amount: 0 };
-            }
-            summary[type].count++;
-            summary[type].netWeight += (row.netWeight || 0);
-            summary[type].amount += (row.amount || 0);
-            totalWeight += (row.netWeight || 0);
-            totalAmount += (row.amount || 0);
-            totalCount++;
+        // ─── 各廠分區統計 ───
+        if (APP.byPlant && APP.byPlant.length > 0) {
+            APP.byPlant.forEach(plant => {
+                // 廠區標題列
+                html += `<tr style="background: #e0e7ff; font-weight: 600;">
+                    <td colspan="2">📍 ${plant.plantName}</td>
+                    <td>${formatNumber(plant.netWeightTon.toFixed(3))}</td>
+                    <td>${formatNumber(plant.amount)}</td>
+                    <td>${formatNumber(plant.count)} 車次</td>
+                </tr>`;
+                // 該廠的垃圾種類明細
+                plant.byWasteType.forEach(wt => {
+                    const pct = plant.netWeight > 0 ? ((wt.netWeight / plant.netWeight) * 100).toFixed(1) : '0';
+                    html += `<tr>
+                        <td style="padding-left: 28px; color: #64748b;">　${wt.wasteType}</td>
+                        <td>${formatNumber(wt.count)}</td>
+                        <td>${formatNumber(wt.netWeightTon.toFixed(3))}</td>
+                        <td>${formatNumber(wt.amount)}</td>
+                        <td>${pct}%</td>
+                    </tr>`;
+                });
+            });
+
+            // 分隔線
+            html += '<tr><td colspan="5" style="border-top: 2px solid #4f46e5; padding: 4px;"></td></tr>';
+        }
+
+        // ─── 全部廠區合併的垃圾種類統計 ───
+        html += `<tr style="background: #f1f5f9; font-weight: 600;">
+            <td colspan="5">📊 全部廠區垃圾種類匯總</td>
+        </tr>`;
+        APP.byWasteType.forEach(wt => {
+            html += `<tr>
+                <td>${wt.wasteType}</td>
+                <td>${formatNumber(wt.count)}</td>
+                <td>${formatNumber(wt.netWeightTon.toFixed(3))}</td>
+                <td>${formatNumber(wt.amount)}</td>
+                <td>${wt.percentage}%</td>
+            </tr>`;
         });
 
-        // 轉換為陣列並排序
-        const summaryList = Object.entries(summary)
-            .map(([type, data]) => ({
-                type,
-                count: data.count,
-                netWeight: data.netWeight,
-                netWeightTon: data.netWeight / 1000,
-                amount: data.amount,
-                percentage: totalWeight > 0 ? ((data.netWeight / totalWeight) * 100).toFixed(1) : 0
-            }))
-            .sort((a, b) => b.netWeight - a.netWeight);
-
-        // 渲染表格
-        summaryBody.innerHTML = summaryList.map(row => `
-            <tr>
-                <td>${row.type}</td>
-                <td>${formatNumber(row.count)}</td>
-                <td>${formatNumber(row.netWeightTon.toFixed(3))}</td>
-                <td>${formatNumber(row.amount)}</td>
-                <td>${row.percentage}%</td>
-            </tr>
-        `).join('');
+        summaryBody.innerHTML = html;
 
         // 更新合計列
         summaryFooter.style.display = '';
-        document.getElementById('summaryTotalCount').textContent = formatNumber(totalCount);
-        document.getElementById('summaryTotalWeight').textContent = formatNumber((totalWeight / 1000).toFixed(3));
-        document.getElementById('summaryTotalAmount').textContent = formatNumber(totalAmount);
+        document.getElementById('summaryTotalCount').textContent = formatNumber(APP.summaryStats.totalCount);
+        document.getElementById('summaryTotalWeight').textContent = formatNumber((APP.summaryStats.totalWeight / 1000).toFixed(3));
+        document.getElementById('summaryTotalAmount').textContent = formatNumber(APP.summaryStats.totalAmount);
     }
 
     function testSimple() {
@@ -678,17 +709,54 @@
             .simpleTest();
     }
 
-    function doQuery() {
+    // ─── 載入遮罩控制 ───
+    function showLoading(text, subtext) {
+        const overlay = document.getElementById('loadingOverlay');
+        const loadingText = document.getElementById('loadingText');
+        const loadingSubtext = document.getElementById('loadingSubtext');
+        if (loadingText) loadingText.textContent = text || '查詢中，請稍候...';
+        if (loadingSubtext) loadingSubtext.textContent = subtext || '';
+        overlay.classList.add('active');
+        document.body.classList.add('loading-active');
+        APP.isQuerying = true;
+
+        // 鎖定查詢按鈕
+        const queryBtn = document.getElementById('queryBtn');
+        if (queryBtn) {
+            queryBtn.disabled = true;
+            queryBtn._origHTML = queryBtn.innerHTML;
+            queryBtn.innerHTML = '<svg viewBox="0 0 50 50" width="18" height="18" style="animation:spin .8s linear infinite"><circle cx="25" cy="25" r="20" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-dasharray="90,150"/></svg> 查詢中...';
+        }
+    }
+
+    function hideLoading() {
+        const overlay = document.getElementById('loadingOverlay');
+        overlay.classList.remove('active');
+        document.body.classList.remove('loading-active');
+        APP.isQuerying = false;
+
+        // 恢復查詢按鈕
+        const queryBtn = document.getElementById('queryBtn');
+        if (queryBtn) {
+            queryBtn.disabled = false;
+            if (queryBtn._origHTML) queryBtn.innerHTML = queryBtn._origHTML;
+        }
+    }
+
+    function doQuery(mode) {
+        // 防止重複查詢
+        if (APP.isQuerying) {
+            showToast('查詢正在進行中，請稍候...', 'info');
+            return;
+        }
+
         const startDate = document.getElementById('queryStartDate').value;
         const endDate = document.getElementById('queryEndDate').value;
         const wasteType = document.getElementById('queryWasteType').value;
         const district = document.getElementById('queryDistrict').value;
         const vendor = document.getElementById('queryVendor').value;
-
-        // 組合來源篩選（區隊或廠商）
         const source = district || vendor || '';
 
-        // 取得選中的廠區
         const plants = [];
         document.querySelectorAll('input[name="queryPlant"]:checked').forEach(cb => {
             plants.push(cb.value);
@@ -700,74 +768,75 @@
             plants: plants.join(','),
             wasteTypes: wasteType === '全部' ? '' : wasteType,
             source: source,
-            limit: 2000 // 增加限制筆數
+            mode: mode || 'stats'
         };
 
-        showToast('查詢中...', 'info');
+        APP.lastQueryParams = params;
+
+        showLoading('查詢統計中，請稍候...', '正在從資料庫讀取並彙總資料');
 
         google.script.run
-            .withSuccessHandler(displayQueryResult)
-            .withFailureHandler(handleError)
+            .withSuccessHandler(function(result) {
+                hideLoading();
+                displayQueryResult(result);
+            })
+            .withFailureHandler(function(error) {
+                hideLoading();
+                handleError(error);
+            })
             .queryData(params);
     }
 
     function displayQueryResult(result) {
-        console.log('收到查詢結果 (Raw):', result);
+        console.log('收到查詢結果:', result);
 
-        // 如果是 JSON 字串則解析
         if (typeof result === 'string') {
-            try {
-                result = JSON.parse(result);
-            } catch (e) {
-                console.error('JSON Parse error:', e);
-                showToast('❌ 系統錯誤：回應格式無法解析', 'error');
-                return;
+            try { result = JSON.parse(result); } catch (e) {
+                showToast('❌ 回應格式無法解析', 'error'); return;
             }
         }
+        if (!result) { showToast('❌ 伺服器未回傳資料', 'error'); return; }
+        if (!result.success) { showToast('查詢失敗: ' + (result.error || '未知錯誤'), 'error'); return; }
 
-        // 檢查 result 是否為 null 或 undefined
-        if (!result) {
-            showToast('❌ 查詢失敗：伺服器未回傳資料 (Result is null)', 'error');
-            console.error('Critical Error: Result is null or undefined. Check Apps Script Executions logs.');
-            return;
+        APP.summaryStats = result.summaryStats || { totalCount: 0, totalWeight: 0, totalAmount: 0 };
+        APP.byPlant = result.byPlant || [];
+        APP.byWasteType = result.byWasteType || [];
+        APP.bySource = result.bySource || [];
+        APP.totalFiltered = APP.summaryStats.totalCount;
+
+        // detail 模式才有分頁資料
+        if (result.mode === 'detail') {
+            APP.queryResult = result.data || [];
+            APP.currentPageNum = result.currentPage || 1;
+            APP.totalPages = result.totalPages || 1;
+        } else {
+            APP.queryResult = [];
+            APP.currentPageNum = 1;
+            APP.totalPages = 0;
         }
 
-        if (!result.success) {
-            showToast('查詢失敗: ' + (result.error || '未知錯誤'), 'error');
-            console.error('Server reported failure:', result.error);
-            return;
-        }
+        console.log('✅ 查詢成功，總符合筆數:', APP.totalFiltered);
 
-        // 檢查 data 是否存在
-        if (!Array.isArray(result.data)) {
-            showToast('❌ 查詢失敗：返回數據格式錯誤 (Data is not array)', 'error');
-            console.error('Invalid data format:', result);
-            return;
-        }
-
-        APP.queryResult = result.data;
-        APP.currentPageNum = 1;
-
-        console.log('✅ 查詢成功，數據筆數:', result.data.length);
-
-        // 更新統計
+        // 更新統計卡片
         const stats = document.getElementById('queryStats');
         stats.style.display = 'flex';
-
-        const totalWeight = APP.queryResult.reduce((sum, r) => sum + (r.netWeight || 0), 0);
-        const totalAmount = APP.queryResult.reduce((sum, r) => sum + (r.amount || 0), 0);
-
-        document.getElementById('queryCount').textContent = formatNumber(result.total);
-        document.getElementById('queryWeight').textContent = formatNumber((totalWeight / 1000).toFixed(3)) + ' 噸';
-        document.getElementById('queryAmount').textContent = formatNumber(totalAmount) + ' 元';
+        document.getElementById('queryCount').textContent = formatNumber(APP.summaryStats.totalCount);
+        document.getElementById('queryWeight').textContent = formatNumber((APP.summaryStats.totalWeight / 1000).toFixed(3)) + ' 噸';
+        document.getElementById('queryAmount').textContent = formatNumber(APP.summaryStats.totalAmount) + ' 元';
 
         // 啟用匯出按鈕
-        document.getElementById('exportExcelBtn').disabled = result.data.length === 0;
+        document.getElementById('exportExcelBtn').disabled = APP.totalFiltered === 0;
 
-        // 渲染表格
-        renderQueryTable();
+        // 根據模式渲染
+        if (result.mode === 'detail') {
+            renderQueryTable();
+            switchView('detail');
+        } else {
+            renderSummaryTable();
+            switchView('summary');
+        }
 
-        showToast('查詢完成，共 ' + result.total + ' 筆', 'success');
+        showToast('查詢完成，共 ' + formatNumber(APP.totalFiltered) + ' 筆', 'success');
     }
 
     function renderQueryTable() {
@@ -775,21 +844,16 @@
         const pagination = document.getElementById('pagination');
 
         if (APP.queryResult.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="12" class="no-data">無符合條件的資料</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="11" class="no-data">無明細資料，請點擊「明細」按鈕載入</td></tr>';
             pagination.style.display = 'none';
             return;
         }
 
-        const start = (APP.currentPageNum - 1) * APP.pageSize;
-        const end = Math.min(start + APP.pageSize, APP.queryResult.length);
-        const pageData = APP.queryResult.slice(start, end);
-
-        tbody.innerHTML = pageData.map(row => `
+        tbody.innerHTML = APP.queryResult.map(row => `
     <tr>
       <td>${row.seqNo}</td>
       <td>${row.plantName}</td>
       <td>${formatDateTime(row.datetime)}</td>
-      <td>${row.lane}</td>
       <td>${row.vehicleNo}</td>
       <td>${row.source}</td>
       <td>${row.wasteType}</td>
@@ -801,19 +865,35 @@
     </tr>
   `).join('');
 
-        // 更新分頁
-        const totalPages = Math.ceil(APP.queryResult.length / APP.pageSize);
-        pagination.style.display = totalPages > 1 ? 'flex' : 'none';
+        pagination.style.display = APP.totalPages > 1 ? 'flex' : 'none';
         document.getElementById('pageInfo').textContent =
-            `第 ${APP.currentPageNum} / ${totalPages} 頁`;
-        document.getElementById('prevPage').disabled = APP.currentPageNum === 1;
-        document.getElementById('nextPage').disabled = APP.currentPageNum === totalPages;
+            `第 ${APP.currentPageNum} / ${APP.totalPages} 頁（共 ${formatNumber(APP.totalFiltered)} 筆）`;
+        document.getElementById('prevPage').disabled = APP.currentPageNum <= 1;
+        document.getElementById('nextPage').disabled = APP.currentPageNum >= APP.totalPages;
     }
 
     function changePage(delta) {
-        const totalPages = Math.ceil(APP.queryResult.length / APP.pageSize);
-        APP.currentPageNum = Math.max(1, Math.min(totalPages, APP.currentPageNum + delta));
-        renderQueryTable();
+        const targetPage = APP.currentPageNum + delta;
+        if (targetPage < 1 || targetPage > APP.totalPages) return;
+        if (APP.isQuerying) return;
+
+        if (APP.lastQueryParams) {
+            APP.lastQueryParams.mode = 'detail';
+            APP.lastQueryParams.page = targetPage;
+            APP.lastQueryParams.pageSize = APP.pageSize;
+            showLoading('載入第 ' + targetPage + ' 頁...', '');
+
+            google.script.run
+                .withSuccessHandler(function(result) {
+                    hideLoading();
+                    displayQueryResult(result);
+                })
+                .withFailureHandler(function(error) {
+                    hideLoading();
+                    handleError(error);
+                })
+                .queryData(APP.lastQueryParams);
+        }
     }
 
     function resetQuery() {
@@ -832,8 +912,15 @@
         });
 
         APP.queryResult = [];
+        APP.lastQueryParams = null;
+        APP.totalFiltered = 0;
+        APP.totalPages = 0;
+        APP.summaryStats = null;
+        APP.byPlant = [];
+        APP.byWasteType = [];
+        APP.bySource = [];
         document.getElementById('queryStats').style.display = 'none';
-        document.getElementById('queryResultBody').innerHTML = '<tr><td colspan="12" class="no-data">請設定查詢條件後點擊查詢</td></tr>';
+        document.getElementById('queryResultBody').innerHTML = '<tr><td colspan="11" class="no-data">請設定查詢條件後點擊查詢</td></tr>';
         document.getElementById('summaryBody').innerHTML = '<tr><td colspan="5" class="no-data">無符合條件的資料</td></tr>';
         document.getElementById('summaryFooter').style.display = 'none';
         document.getElementById('pagination').style.display = 'none';
@@ -844,18 +931,56 @@
     }
 
     function exportQueryResult() {
-        if (APP.queryResult.length === 0) return;
+        if (APP.totalFiltered === 0 || !APP.lastQueryParams) {
+            showToast('沒有可匯出的資料', 'info');
+            return;
+        }
+        if (APP.isQuerying) {
+            showToast('查詢進行中，請稍候再匯出', 'info');
+            return;
+        }
 
-        // 準備 Excel 資料
-        const headers = ['序號', '廠區', '日期時間', '車道', '車號', '區隊/廠商', '垃圾種類', '總重', '空重', '淨重', '金額', '備註'];
+        // 分批下載所有頁面資料
+        const allData = [];
+        const exportPageSize = APP.pageSize;
+        const totalPages = Math.ceil(APP.totalFiltered / exportPageSize);
+
+        showLoading('匯出中...', '正在下載第 1/' + totalPages + ' 頁');
+
+        function fetchPage(pg) {
+            const params = Object.assign({}, APP.lastQueryParams, { mode: 'detail', page: pg, pageSize: exportPageSize });
+            google.script.run
+                .withSuccessHandler(function(result) {
+                    if (result.success && Array.isArray(result.data)) {
+                        result.data.forEach(row => allData.push(row));
+                    }
+                    if (pg < totalPages) {
+                        document.getElementById('loadingSubtext').textContent = '正在下載第 ' + (pg + 1) + '/' + totalPages + ' 頁';
+                        fetchPage(pg + 1);
+                    } else {
+                        hideLoading();
+                        buildAndDownloadExcel(allData);
+                    }
+                })
+                .withFailureHandler(function(error) {
+                    hideLoading();
+                    showToast('匯出失敗: ' + (error.message || error), 'error');
+                })
+                .queryData(params);
+        }
+
+        fetchPage(1);
+    }
+
+    function buildAndDownloadExcel(rows) {
+        const headers = ['序號', '廠區', '日期時間', '車號', '區隊/廠商', '垃圾種類', '總重', '空重', '淨重', '金額', '備註'];
         const data = [headers];
 
-        APP.queryResult.forEach(row => {
+        rows.forEach(row => {
             data.push([
                 row.seqNo,
                 row.plantName,
                 formatDateTime(row.datetime),
-                row.lane,
                 row.vehicleNo,
                 row.source,
                 row.wasteType,
@@ -867,14 +992,11 @@
             ]);
         });
 
-        // 建立 workbook
         const ws = XLSX.utils.aoa_to_sheet(data);
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, '查詢結果');
-
-        // 下載
         XLSX.writeFile(wb, '地磅查詢結果_' + formatDate(new Date()) + '.xlsx');
-        showToast('Excel 匯出成功', 'success');
+        showToast('Excel 匯出成功，共 ' + rows.length + ' 筆', 'success');
     }
 
     // ============================================================

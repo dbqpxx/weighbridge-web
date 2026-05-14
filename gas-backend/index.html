@@ -373,7 +373,6 @@
                       <th>序號</th>
                       <th>廠區</th>
                       <th>日期時間</th>
-                      <th>車道</th>
                       <th>車號</th>
                       <th>區隊/廠商</th>
                       <th>垃圾種類</th>
@@ -386,7 +385,7 @@
                   </thead>
                   <tbody id="queryResultBody">
                     <tr>
-                      <td colspan="12" class="no-data">請設定查詢條件後點擊查詢</td>
+                      <td colspan="11" class="no-data">請設定查詢條件後點擊查詢</td>
                     </tr>
                   </tbody>
                 </table>
@@ -563,6 +562,21 @@
 
       </div>
     </main>
+  </div>
+
+  <!-- 全域載入遮罩 -->
+  <div class="loading-overlay" id="loadingOverlay">
+    <div class="loading-content">
+      <div class="loading-spinner">
+        <svg viewBox="0 0 50 50" width="56" height="56">
+          <circle cx="25" cy="25" r="20" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-dasharray="90,150" stroke-dashoffset="0">
+            <animateTransform attributeName="transform" type="rotate" from="0 25 25" to="360 25 25" dur="0.85s" repeatCount="indefinite"/>
+          </circle>
+        </svg>
+      </div>
+      <p class="loading-text" id="loadingText">查詢中，請稍候...</p>
+      <p class="loading-subtext" id="loadingSubtext"></p>
+    </div>
   </div>
 
   <!-- Toast 通知 -->
