@@ -717,15 +717,20 @@ function switchView(view) {
         summaryView.style.display = 'none';
         viewDetailBtn.classList.add('active');
         viewSummaryBtn.classList.remove('active');
-        // 明細模式顯示分頁
+        
         const totalPages = Math.ceil((APP.totalFiltered || 0) / APP.pageSize);
-        pagination.style.display = totalPages > 1 ? 'flex' : 'none';
+        
+        // 如果目前沒有明細資料，而且總筆數大於 0，就自動載入第一頁明細
+        if (APP.queryResult.length === 0 && APP.totalFiltered > 0) {
+            changePage(0); // 載入資料 (targetPage = 1 + 0 = 1)
+        } else {
+            pagination.style.display = totalPages > 1 ? 'flex' : 'none';
+        }
     } else {
         detailView.style.display = 'none';
         summaryView.style.display = 'block';
         viewDetailBtn.classList.remove('active');
         viewSummaryBtn.classList.add('active');
-        // 匯總模式隱藏分頁
         pagination.style.display = 'none';
     }
 }
@@ -828,7 +833,7 @@ function displayQueryResult(result) {
     } else {
         APP.queryResult = [];
         APP.currentPageNum = 1;
-        APP.totalPages = 0;
+        APP.totalPages = Math.ceil((APP.totalFiltered || 0) / APP.pageSize);
     }
 
     const stats = document.getElementById('queryStats');

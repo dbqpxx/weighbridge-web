@@ -597,32 +597,20 @@
             summaryView.style.display = 'none';
             viewDetailBtn.classList.add('active');
             viewSummaryBtn.classList.remove('active');
-            // 如果尚未載入明細，觸發後端 detail 查詢
-            if (APP.queryResult.length === 0 && APP.lastQueryParams && APP.totalFiltered > 0) {
-                APP.lastQueryParams.mode = 'detail';
-                APP.lastQueryParams.page = 1;
-                APP.lastQueryParams.pageSize = APP.pageSize;
-                showLoading('載入明細資料...', '');
-                google.script.run
-                    .withSuccessHandler(function(result) {
-                        hideLoading();
-                        if (result.success && result.data) {
-                            APP.queryResult = result.data;
-                            APP.currentPageNum = result.currentPage || 1;
-                            APP.totalPages = result.totalPages || 1;
-                            renderQueryTable();
-                        }
-                    })
-                    .withFailureHandler(function(error) { hideLoading(); handleError(error); })
-                    .queryData(APP.lastQueryParams);
+            
+            const totalPages = Math.ceil((APP.totalFiltered || 0) / APP.pageSize);
+            
+            // 如果目前沒有明細資料，而且總筆數大於 0，就自動載入第一頁明細
+            if (APP.queryResult.length === 0 && APP.totalFiltered > 0) {
+                changePage(0); // 載入資料 (targetPage = 1 + 0 = 1)
+            } else {
+                pagination.style.display = totalPages > 1 ? 'flex' : 'none';
             }
-            pagination.style.display = APP.totalPages > 1 ? 'flex' : 'none';
         } else {
             detailView.style.display = 'none';
             summaryView.style.display = 'block';
             viewDetailBtn.classList.remove('active');
             viewSummaryBtn.classList.add('active');
-            // 匯總模式隱藏分頁
             pagination.style.display = 'none';
             // 渲染匯總表格
             renderSummaryTable();
@@ -806,14 +794,14 @@
 
         // detail 模式才有分頁資料
         if (result.mode === 'detail') {
-            APP.queryResult = result.data || [];
-            APP.currentPageNum = result.currentPage || 1;
-            APP.totalPages = result.totalPages || 1;
-        } else {
-            APP.queryResult = [];
-            APP.currentPageNum = 1;
-            APP.totalPages = 0;
-        }
+        APP.queryResult = result.data || [];
+        APP.currentPageNum = result.currentPage || 1;
+        APP.totalPages = result.totalPages || 1;
+    } else {
+        APP.queryResult = [];
+        APP.currentPageNum = 1;
+        APP.totalPages = Math.ceil((APP.totalFiltered || 0) / APP.pageSize);
+    }
 
         console.log('✅ 查詢成功，總符合筆數:', APP.totalFiltered);
 
