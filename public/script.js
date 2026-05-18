@@ -768,6 +768,7 @@ function renderSummaryTable() {
 function doQuery() {
     const startDate = document.getElementById('queryStartDate').value;
     const endDate = document.getElementById('queryEndDate').value;
+    const wasteGroup = document.getElementById('queryWasteGroup') ? document.getElementById('queryWasteGroup').value : '';
     const wasteType = document.getElementById('queryWasteType').value;
     const district = document.getElementById('queryDistrict').value;
     const vendor = document.getElementById('queryVendor').value;
@@ -779,11 +780,18 @@ function doQuery() {
         plants.push(cb.value);
     });
 
+    let targetWasteTypes = '';
+    if (wasteType && wasteType !== '全部') {
+        targetWasteTypes = wasteType;
+    } else if (wasteGroup && APP.sourceList && APP.sourceList.groups && APP.sourceList.groups[wasteGroup]) {
+        targetWasteTypes = APP.sourceList.groups[wasteGroup].join(',');
+    }
+
     APP.lastQueryParams = {
         startDate: startDate,
         endDate: endDate,
         plants: plants.join(','),
-        wasteTypes: wasteType === '全部' ? '' : wasteType,
+        wasteTypes: targetWasteTypes,
         source: source,
         mode: 'stats',
         page: 1,
@@ -838,9 +846,41 @@ function displayQueryResult(result) {
 
     const stats = document.getElementById('queryStats');
     stats.style.display = 'flex';
-    document.getElementById('queryCount').textContent = formatNumber(APP.summaryStats.totalCount);
-    document.getElementById('queryWeight').textContent = formatNumber((APP.summaryStats.totalWeight / 1000).toFixed(3)) + ' 噸';
-    document.getElementById('queryAmount').textContent = formatNumber(APP.summaryStats.totalAmount) + ' 元';
+    stats.style.flexWrap = 'wrap';
+    stats.style.gap = '10px';
+    
+    let statsHTML = '';
+    
+    // 各廠統計
+    if (APP.byPlant && APP.byPlant.length > 0) {
+        APP.byPlant.forEach(plant => {
+            const plantColor = PLANT_COLORS[plant.plant]?.border || '#3b82f6';
+            statsHTML += `
+              <div class="stat-mini" style="border-left: 4px solid ${plantColor}; background-color: rgba(0,0,0,0.02); padding: 8px 12px; border-radius: 4px; display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 200px;">
+                <span class="label" style="font-size: 13px; font-weight: bold; color: ${plantColor};">${plant.plantName}</span>
+                <span class="value" style="font-size: 14px; color: var(--text-primary);">
+                  ${formatNumber(plant.count)} 筆 | 
+                  ${formatNumber(plant.netWeightTon.toFixed(3))} 噸 | 
+                  ${formatNumber(plant.amount)} 元
+                </span>
+              </div>
+            `;
+        });
+    }
+    
+    // 合計
+    statsHTML += `
+      <div class="stat-mini" style="border-left: 4px solid var(--primary); background-color: var(--bg-tertiary); padding: 8px 12px; border-radius: 4px; display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 200px; box-shadow: var(--shadow-sm);">
+        <span class="label" style="font-size: 13px; font-weight: bold; color: var(--text-primary);">合計</span>
+        <span class="value" style="font-size: 15px; font-weight: bold; color: var(--primary);">
+          ${formatNumber(APP.summaryStats.totalCount)} 筆 | 
+          ${formatNumber((APP.summaryStats.totalWeight / 1000).toFixed(3))} 噸 | 
+          ${formatNumber(APP.summaryStats.totalAmount)} 元
+        </span>
+      </div>
+    `;
+    
+    stats.innerHTML = statsHTML;
 
     document.getElementById('exportExcelBtn').disabled = APP.totalFiltered === 0;
 
