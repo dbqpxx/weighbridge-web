@@ -10,6 +10,8 @@ const APP = {
     config: null,
     charts: {},
     queryResult: [],
+    allDetailData: [],
+    isDetailDataFetched: false,
     pageSize: 50,
     currentPageNum: 1
 };
@@ -718,13 +720,10 @@ function switchView(view) {
         viewDetailBtn.classList.add('active');
         viewSummaryBtn.classList.remove('active');
         
-        const totalPages = Math.ceil((APP.totalFiltered || 0) / APP.pageSize);
-        
-        // 如果目前沒有明細資料，而且總筆數大於 0，就自動載入第一頁明細
-        if (APP.queryResult.length === 0 && APP.totalFiltered > 0) {
-            changePage(0); // 載入資料 (targetPage = 1 + 0 = 1)
+        if (!APP.isDetailDataFetched && APP.totalFiltered > 0) {
+            fetchAllPagesForDetail();
         } else {
-            pagination.style.display = totalPages > 1 ? 'flex' : 'none';
+            renderQueryTable();
         }
     } else {
         detailView.style.display = 'none';
@@ -733,6 +732,40 @@ function switchView(view) {
         viewSummaryBtn.classList.add('active');
         pagination.style.display = 'none';
     }
+}
+
+function fetchAllPagesForDetail() {
+    APP.allDetailData = [];
+    const totalPages = Math.ceil(APP.totalFiltered / APP.pageSize);
+    
+    showLoading('載入明細資料..', '正在下載 1/' + totalPages + ' 頁');
+
+    function fetchPage(pg) {
+        const params = Object.assign({}, APP.lastQueryParams, { mode: 'detail', page: pg, pageSize: APP.pageSize });
+        
+        callApi('queryData', params)
+            .then(function(result) {
+                if (result.success && Array.isArray(result.data)) {
+                    result.data.forEach(row => APP.allDetailData.push(row));
+                }
+                if (pg < totalPages) {
+                    document.getElementById('loadingSubtext').textContent = '正在下載 ' + (pg + 1) + '/' + totalPages + ' 頁';
+                    fetchPage(pg + 1);
+                } else {
+                    hideLoading();
+                    APP.isDetailDataFetched = true;
+                    APP.currentPageNum = 1;
+                    APP.totalPages = totalPages;
+                    renderQueryTable();
+                }
+            })
+            .catch(function(error) {
+                hideLoading();
+                showToast('載入明細失敗: ' + (error.message || error), 'error');
+            });
+    }
+    
+    fetchPage(1);
 }
 
 function renderSummaryTable() {
@@ -840,6 +873,8 @@ function displayQueryResult(result) {
         APP.totalPages = result.totalPages || 1;
     } else {
         APP.queryResult = [];
+        APP.allDetailData = [];
+        APP.isDetailDataFetched = false;
         APP.currentPageNum = 1;
         APP.totalPages = Math.ceil((APP.totalFiltered || 0) / APP.pageSize);
     }
@@ -899,13 +934,21 @@ function renderQueryTable() {
     const tbody = document.getElementById('queryResultBody');
     const pagination = document.getElementById('pagination');
 
-    if (APP.queryResult.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="11" class="no-data">如需明細，請點擊「明細」按鈕載入</td></tr>';
+    if (!APP.isDetailDataFetched || APP.allDetailData.length === 0) {
+        if (APP.totalFiltered === 0) {
+            tbody.innerHTML = '<tr><td colspan="11" class="no-data">無明細資料</td></tr>';
+        } else {
+            tbody.innerHTML = '<tr><td colspan="11" class="no-data">如需明細，請點擊「明細」按鈕載入</td></tr>';
+        }
         pagination.style.display = 'none';
         return;
     }
 
-    tbody.innerHTML = APP.queryResult.map(row => `
+    const startIndex = (APP.currentPageNum - 1) * APP.pageSize;
+    const endIndex = startIndex + APP.pageSize;
+    const currentPageData = APP.allDetailData.slice(startIndex, endIndex);
+
+    tbody.innerHTML = currentPageData.map(row => `
     <tr>
       <td>${row.seqNo}</td>
       <td>${row.plantName}</td>
@@ -932,23 +975,9 @@ function changePage(delta) {
     const targetPage = APP.currentPageNum + delta;
     if (targetPage < 1 || targetPage > APP.totalPages) return;
     
-    if (APP.lastQueryParams) {
-        APP.lastQueryParams.mode = 'detail';
-        APP.lastQueryParams.page = targetPage;
-        APP.lastQueryParams.pageSize = APP.pageSize;
-        showLoading('載入第 ' + targetPage + ' 頁..', '');
-
-        callApi('queryData', APP.lastQueryParams)
-            .then(function(result) {
-                hideLoading();
-                displayQueryResult(result);
-                document.querySelector('.result-header').scrollIntoView({ behavior: 'smooth' });
-            })
-            .catch(function(error) {
-                hideLoading();
-                handleError(error);
-            });
-    }
+    APP.currentPageNum = targetPage;
+    renderQueryTable();
+    document.querySelector('.result-header').scrollIntoView({ behavior: 'smooth' });
 }
 
 function resetQuery() {
@@ -960,6 +989,8 @@ function resetQuery() {
     document.querySelectorAll('input[name="queryPlant"]').forEach(cb => cb.checked = true);
 
     APP.queryResult = [];
+    APP.allDetailData = [];
+    APP.isDetailDataFetched = false;
     document.getElementById('queryStats').style.display = 'none';
     renderQueryTable();
 }
@@ -967,6 +998,13 @@ function resetQuery() {
 function exportQueryResult() {
     if (APP.totalFiltered === 0 || !APP.lastQueryParams) {
         showToast('沒有可匯出的資料', 'info');
+        return;
+    }
+
+    if (APP.isDetailDataFetched && APP.allDetailData && APP.allDetailData.length > 0) {
+        showLoading('匯出中..', '正在產生 Excel...');
+        buildAndDownloadExcel(APP.allDetailData);
+        hideLoading();
         return;
     }
 
