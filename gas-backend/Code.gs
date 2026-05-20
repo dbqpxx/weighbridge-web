@@ -630,7 +630,7 @@ function queryDataTest() {
  */
 function queryData(params) {
   Logger.log('[queryData] Started with params: ' + JSON.stringify(params));
-  const { startDate, endDate, plants, wasteTypes, source } = params;
+  const { startDate, endDate, plants, wasteTypes, source, vehicleNo } = params;
   const mode = params.mode || 'stats';
   const page = parseInt(params.page) || 1;
   const pageSize = parseInt(params.pageSize) || 50;
@@ -726,6 +726,12 @@ function queryData(params) {
       const src = String(row[6] || '').trim();
       if (resolvedSources) {
         if (!resolvedSources.some(s => src.indexOf(s) !== -1)) continue;
+      }
+      
+      // 車號過濾
+      const vehNo = String(row[4] || '').trim();
+      if (vehicleNo && String(vehicleNo).trim()) {
+        if (vehNo.toLowerCase().indexOf(String(vehicleNo).trim().toLowerCase()) === -1) continue;
       }
       
       const nw = parseNumber(row[10]);

@@ -797,6 +797,7 @@ function doQuery() {
     const wasteType = document.getElementById('queryWasteType').value;
     const district = document.getElementById('queryDistrict').value;
     const vendor = document.getElementById('queryVendor').value;
+    const vehicleNo = document.getElementById('queryVehicleNo').value;
 
     const source = district || vendor || '';
 
@@ -818,6 +819,7 @@ function doQuery() {
         plants: plants.join(','),
         wasteTypes: targetWasteTypes,
         source: source,
+        vehicleNo: vehicleNo,
         mode: 'stats',
         page: 1,
         pageSize: APP.pageSize
@@ -977,6 +979,7 @@ function resetQuery() {
     document.getElementById('queryEndDate').value = formatDate(new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0));
     document.getElementById('queryDistrict').value = '';
     document.getElementById('queryVendor').value = '';
+    document.getElementById('queryVehicleNo').value = '';
     document.getElementById('queryWasteType').value = '';
     document.querySelectorAll('input[name="queryPlant"]').forEach(cb => cb.checked = true);
 
