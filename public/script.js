@@ -736,36 +736,28 @@ function switchView(view) {
 
 function fetchAllPagesForDetail() {
     APP.allDetailData = [];
-    const totalPages = Math.ceil(APP.totalFiltered / APP.pageSize);
     
-    showLoading('載入明細資料..', '正在下載 1/' + totalPages + ' 頁');
+    showLoading('載入明細資料..', '正在自伺服器下載完整明細...');
 
-    function fetchPage(pg) {
-        const params = Object.assign({}, APP.lastQueryParams, { mode: 'detail', page: pg, pageSize: APP.pageSize });
-        
-        callApi('queryData', params)
-            .then(function(result) {
-                if (result.success && Array.isArray(result.data)) {
-                    result.data.forEach(row => APP.allDetailData.push(row));
-                }
-                if (pg < totalPages) {
-                    document.getElementById('loadingSubtext').textContent = '正在下載 ' + (pg + 1) + '/' + totalPages + ' 頁';
-                    fetchPage(pg + 1);
-                } else {
-                    hideLoading();
-                    APP.isDetailDataFetched = true;
-                    APP.currentPageNum = 1;
-                    APP.totalPages = totalPages;
-                    renderQueryTable();
-                }
-            })
-            .catch(function(error) {
-                hideLoading();
-                showToast('載入明細失敗: ' + (error.message || error), 'error');
-            });
-    }
+    const params = Object.assign({}, APP.lastQueryParams, { mode: 'detail', page: 1, pageSize: 100000 });
     
-    fetchPage(1);
+    callApi('queryData', params)
+        .then(function(result) {
+            hideLoading();
+            if (result.success && Array.isArray(result.data)) {
+                APP.allDetailData = result.data;
+                APP.isDetailDataFetched = true;
+                APP.currentPageNum = 1;
+                APP.totalPages = Math.ceil(APP.allDetailData.length / APP.pageSize) || 1;
+                renderQueryTable();
+            } else {
+                showToast('載入明細失敗: ' + (result.error || '未知錯誤'), 'error');
+            }
+        })
+        .catch(function(error) {
+            hideLoading();
+            showToast('載入明細失敗: ' + (error.message || error), 'error');
+        });
 }
 
 function renderSummaryTable() {
@@ -1008,35 +1000,23 @@ function exportQueryResult() {
         return;
     }
 
-    const allData = [];
-    const exportPageSize = APP.pageSize;
-    const totalPages = Math.ceil(APP.totalFiltered / exportPageSize);
+    showLoading('匯出中..', '正在下載完整數據...');
 
-    showLoading('匯出中..', '正在下載 1/' + totalPages + ' 頁');
-
-    function fetchPage(pg) {
-        const params = Object.assign({}, APP.lastQueryParams, { mode: 'detail', page: pg, pageSize: exportPageSize });
-        
-        callApi('queryData', params)
-            .then(function(result) {
-                if (result.success && Array.isArray(result.data)) {
-                    result.data.forEach(row => allData.push(row));
-                }
-                if (pg < totalPages) {
-                    document.getElementById('loadingSubtext').textContent = '正在下載 ' + (pg + 1) + '/' + totalPages + ' 頁';
-                    fetchPage(pg + 1);
-                } else {
-                    hideLoading();
-                    buildAndDownloadExcel(allData);
-                }
-            })
-            .catch(function(error) {
-                hideLoading();
-                showToast('匯出失敗: ' + (error.message || error), 'error');
-            });
-    }
-
-    fetchPage(1);
+    const params = Object.assign({}, APP.lastQueryParams, { mode: 'detail', page: 1, pageSize: 100000 });
+    
+    callApi('queryData', params)
+        .then(function(result) {
+            hideLoading();
+            if (result.success && Array.isArray(result.data)) {
+                buildAndDownloadExcel(result.data);
+            } else {
+                showToast('匯出失敗: ' + (result.error || '未知錯誤'), 'error');
+            }
+        })
+        .catch(function(error) {
+            hideLoading();
+            showToast('匯出失敗: ' + (error.message || error), 'error');
+        });
 }
 
 function buildAndDownloadExcel(rows) {
