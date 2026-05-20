@@ -248,6 +248,7 @@ function updateSourceDropdowns() {
     const districtList = document.getElementById('districtList');
     const vendorList = document.getElementById('vendorList');
     const wasteTypeList = document.getElementById('wasteTypeList');
+    const wasteGroupSelect = document.getElementById('queryWasteGroup');
 
     if (!APP.sourceList) {
         console.log('sourceList 尚未載入');
@@ -278,29 +279,39 @@ function updateSourceDropdowns() {
 
     // [NEW] 更新垃圾種類清單 (加入種類集)
     if (wasteTypeList && APP.sourceList.wasteTypes) {
-        wasteTypeList.innerHTML = '';
-
-        // 1. 加入「全部」
-        const allOption = document.createElement('option');
-        allOption.value = '全部';
-        wasteTypeList.appendChild(allOption);
-
-        // 2. 加入「種類集 (Groups)」
-        if (APP.sourceList.groups) {
-            Object.keys(APP.sourceList.groups).forEach(groupName => {
+        function populateWasteTypes(filterGroup) {
+            wasteTypeList.innerHTML = '';
+            const allOption = document.createElement('option');
+            allOption.value = '全部';
+            wasteTypeList.appendChild(allOption);
+            
+            APP.sourceList.wasteTypes.forEach(w => {
+                if (filterGroup && APP.sourceList.groups && APP.sourceList.groups[filterGroup]) {
+                    if (!APP.sourceList.groups[filterGroup].includes(w.name)) {
+                        return;
+                    }
+                }
                 const option = document.createElement('option');
-                option.value = groupName;
-                option.label = `[種類集] ${groupName}`; // 在某些瀏覽器可見，提示為集合
+                option.value = w.name;
                 wasteTypeList.appendChild(option);
             });
         }
-
-        // 3. 加入「統一名稱」
-        APP.sourceList.wasteTypes.forEach(w => {
-            const option = document.createElement('option');
-            option.value = w.name;
-            wasteTypeList.appendChild(option);
-        });
+        
+        if (wasteGroupSelect && APP.sourceList.groups) {
+            wasteGroupSelect.innerHTML = '<option value="">全部</option>';
+            Object.keys(APP.sourceList.groups).forEach(groupName => {
+                const option = document.createElement('option');
+                option.value = groupName;
+                option.textContent = groupName;
+                wasteGroupSelect.appendChild(option);
+            });
+            
+            wasteGroupSelect.addEventListener('change', function() {
+                populateWasteTypes(this.value);
+                document.getElementById('queryWasteType').value = '';
+            });
+        }
+        populateWasteTypes('');
     }
 }
 
